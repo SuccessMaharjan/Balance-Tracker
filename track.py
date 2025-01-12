@@ -1,20 +1,66 @@
 import streamlit as st
 import pandas as pd
+import sqlite3
 import plotly.express as px
 
-# Initialize session state for storing transactions
-if "transactions" not in st.session_state:
-    st.session_state["transactions"] = []
+# Database connection setup
+def get_db_connection():
+    conn = sqlite3.connect('transactions.db')
+    return conn
 
-# Function to calculate balance for each transaction
+# Create table if not exists (should be done once on app startup)
+def create_table():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            full_date TEXT,
+            month TEXT,
+            amount_bought REAL,
+            amount_sold REAL,
+            amount_deposited REAL,
+            balance_amount REAL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+# Function to load transactions from the database
+def load_transactions():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM transactions")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    # Convert to DataFrame for easy display
+    transactions_df = pd.DataFrame(rows, columns=["ID", "Full Date", "Month", "Amount Bought", "Amount Sold", "Amount Deposited", "Balance Amount"])
+    return transactions_df
+
+# Function to save new transaction into the database
+def save_transaction(transaction):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO transactions (full_date, month, amount_bought, amount_sold, amount_deposited, balance_amount)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (transaction["Full Date"], transaction["Month"], transaction["Amount Bought"], transaction["Amount Sold"], transaction["Amount Deposited"], transaction["Balance Amount"]))
+    conn.commit()
+    conn.close()
+
+# Function to calculate running balance
 def calculate_running_balance(transactions):
     balance = 0
-    for transaction in transactions:
-        balance += transaction["Amount Deposited"]
-        balance -= transaction["Amount Bought"]
-        balance += transaction["Amount Sold"]
-        transaction["Balance Amount"] = balance
+    for index, row in transactions.iterrows():
+        balance += row["Amount Deposited"]
+        balance -= row["Amount Bought"]
+        balance += row["Amount Sold"]
+        transactions.at[index, "Balance Amount"] = balance
     return transactions
+
+# Initialize database and table
+create_table()
 
 # App title with custom style
 st.markdown(
@@ -23,7 +69,7 @@ st.markdown(
 )
 st.write("Keep track of your stock transactions with ease.")
 
-# Input form
+# Input form for new transaction
 st.markdown("---")
 st.subheader("📥 Add New Transaction")
 with st.form("transaction_form"):
@@ -42,6 +88,7 @@ with st.form("transaction_form"):
     )
 
     if submitted:
+        # Prepare the new transaction data
         new_transaction = {
             "Full Date": full_date,
             "Month": month,
@@ -50,16 +97,21 @@ with st.form("transaction_form"):
             "Amount Deposited": amount_deposited,
             "Balance Amount": 0,  # Temporary; updated in the next step
         }
-        st.session_state["transactions"].append(new_transaction)
-        st.session_state["transactions"] = calculate_running_balance(st.session_state["transactions"])
+
+        # Save transaction to the database
+        save_transaction(new_transaction)
+
+        # Reload transactions from the database and recalculate balances
+        transactions_df = load_transactions()
+        transactions_df = calculate_running_balance(transactions_df)
+
         st.success("Transaction added successfully!")
 
 # Display transaction history
 st.markdown("---")
 st.subheader("📊 Transaction History")
-if st.session_state["transactions"]:
-    transactions_df = pd.DataFrame(st.session_state["transactions"])
-
+transactions_df = load_transactions()
+if not transactions_df.empty:
     # Show the data table
     st.dataframe(transactions_df.style.format({"Amount Bought": "${:,.2f}", "Amount Sold": "${:,.2f}", "Amount Deposited": "${:,.2f}", "Balance Amount": "${:,.2f}"}))
 
